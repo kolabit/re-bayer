@@ -1,5 +1,5 @@
 # ***Re-bayer*** project
-Utilities for converting RGB images into RAW Bayer iles using simple sub-sampling algorithm. 
+Utilities for converting RGB images into RAW Bayer files using simple sub-sampling algorithm. 
 
 ![Re-Bayer algorithm](./re-bayer.jpg)
 
@@ -65,13 +65,13 @@ python re-bayer.py -i ./test_data/imagenet_val_5  -o ./test_data/imagenet_val_5_
 - `--input-folder`, `-i`
   Input folder with source image files, scanned recursively. Default: `./`
 - `--output-folder`, `-o`
-  Output folder for `.RAW` files. Relative input subfolders are preserved. Default: `./out`
+  Output folder for `.RAW` files. Relative input sub-folders are preserved. Default: `./out`
 - `--pattern`, `-p`
   Bayer pattern: `RGGB`, `GRBG`, `GBRG`, `BGGR`. Default: `RGGB`
   
 ## Image validator: _validate.py_
-Utility ro validate converted RAW Bayer. Convertion is performed by checking image Color pixel signal to noise ratio (CPSNR).
-Value of 15dB and higher usulaly means conversion was OK.
+Utility to validate converted RAW Bayer. Conversion is performed by checking image Color pixel signal to noise ratio (CPSNR).
+Value of 15dB and higher usually means conversion was OK.
 ![CPSNR](./psnr.jpg)
 
 ### Usage
