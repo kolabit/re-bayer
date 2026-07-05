@@ -1,82 +1,102 @@
-# re-bayer
+# ***Re-bayer*** project
+Utilities for converting RGB images into RAW Bayer iles using simple sub-sampling algorithm. 
 
-Utility for converting RGB images into RAW Bayer files.
+![Re-Bayer algorithm](./re-bayer.jpg)
 
-## Features
+Tested on Linux only. It *may* work on Windows, but never tested.
+# Prerequisites
 
-- Scans an input folder recursively for image files
-- Supports `.jpeg`, `.jpg`, `.png`, `.bmp`, `.tif`, `.tiff`, `.webp`
-- Writes output files as `source_filename_WIDTHxHEIGHT@PATTERN.RAW`
-- Preserves the input folder structure under the output folder
-- Supports Bayer patterns `RGGB`, `GRBG`, `GBRG`, `BGGR`
-- Views de-Bayered `.RAW` files with OpenCV, using the filename suffix by default
-- Implements algorithm `0`:
-  for each RAW pixel, takes the matching `R`, `G`, or `B` value from the same RGB pixel according to the selected Bayer pattern
-- Includes a validation procedure that de-Bayers RAW output with OpenCV, computes PSNR against the source image, and writes a CSV report
+This project uses **uv** to manage the Python environment and project dependencies. Please install **uv** before proceeding.
 
-Algorithms `1`, `2`, and later are reserved for future work and currently return `NotImplementedError`.
+## Install uv
 
-## Usage
+### Linux / macOS
 
 ```bash
-./.venv/bin/python re-bayer.py
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
+
+### Windows (PowerShell)
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+Alternatively, install using `pip`:
 
 ```bash
-./.venv/bin/python re-bayer.py --input-folder ./images --output-folder ./our --pattern RGGB
+pip install uv
 ```
 
-For example, `./images/class_a/frame.jpg` is written as
-`./our/class_a/frame_WIDTHxHEIGHT@RGGB.RAW`.
+Verify the installation:
 
 ```bash
-./.venv/bin/python validate.py --input-folder ./images --output-folder ./our --pattern RGGB --min-psnr 20.0 --report-csv ./validation_report.csv
+uv --version
 ```
+
+### Install Project Dependencies
+
+From the project root directory, run:
 
 ```bash
-./.venv/bin/python view_raw.py ./our/source_filename_500x375@RGGB.RAW
+uv sync
 ```
 
+This command creates a virtual environment (if necessary) and installs all required project dependencies.
+
+# Test with images of five classes of validation set of ImageNet-1k dataset
 ```bash
-./.venv/bin/python view_raw.py ./frame.RAW --width 500 --height 375 --bayer-start RGGB
+source ./.venv/bin/activate
+./run_test.sh
+```
+Make sure *view-errors.sh* script created with *echo 'No errors found'* output inside
+
+# Utilities included
+## Image converter: _re-bayer.py_
+Main conversion utility. Utility to convert RGB images into RAW Bayer
+
+### Usage
+```bash
+source ./.venv/bin/activate
+python re-bayer.py -i ./test_data/imagenet_val_5  -o ./test_data/imagenet_val_5_bayer_rggb -p RGGB
 ```
 
-## Arguments
-
+### Arguments
 - `--input-folder`, `-i`
   Input folder with source image files, scanned recursively. Default: `./`
 - `--output-folder`, `-o`
-  Output folder for `.RAW` files. Relative input subfolders are preserved. Default: `./our`
+  Output folder for `.RAW` files. Relative input subfolders are preserved. Default: `./out`
 - `--pattern`, `-p`
   Bayer pattern: `RGGB`, `GRBG`, `GBRG`, `BGGR`. Default: `RGGB`
+  
+## Image validator: _validate.py_
+Utility ro validate converted RAW Bayer. Convertion is performed by checking image Color pixel signal to noise ratio (CPSNR).
+Value of 15dB and higher usulaly means conversion was OK.
+![CPSNR](./psnr.jpg)
 
-## Validation Procedure
-
-Use `validate.py` after generating `.RAW` files.
-
-What it does:
-
-- Finds the expected RAW file for each source image using the format `source_filename_WIDTHxHEIGHT@PATTERN.RAW`
-- Preserves the source image's relative folder path when looking under the output folder
-- De-Bayers the RAW file with OpenCV using the selected Bayer pattern
-- Calculates PSNR against the original source image
-- Prints an error message when PSNR is below the configured threshold
-- Stores `input_file`, `output_file`, `status`, `error_code`, `psnr_db`, and `message` in a CSV report
-
-Validation arguments:
-
+### Usage
+```bash
+source ./.venv/bin/activate
+python validate.py -i ./test_data/imagenet_val_5  -o ./test_data/imagenet_val_5_bayer_rggb -p RGGB -m 15 -r validation_results.csv -e ./view-errors.sh
+```
+### Arguments
 - `--input-folder`, `-i`
-  Folder with source image files, scanned recursively. Default: `./`
+  Input folder with source image files, scanned recursively. Default: `./`
 - `--output-folder`, `-o`
-  Folder with output `.RAW` files. Relative input subfolders are preserved. Default: `./our`
+  Output folder for `.RAW` files. Relative input subfolders are preserved. Default: `./out`
 - `--pattern`, `-p`
   Bayer pattern: `RGGB`, `GRBG`, `GBRG`, `BGGR`. Default: `RGGB`
-- `--min-psnr`
-  Minimum acceptable PSNR in dB. Default: `20.0`
-- `--report-csv`
+- `--min-psnr`, `-m`
+  Minimum acceptable PSNR in dB. Default: `15.0`
+- `--report-csv, `-r`
   CSV report path. Default: `./validation_report.csv`
+- `--psnr-error-view-script, `-e`
+  Optional shell script output path. When set, writes commands that run view_raw.py for each RAW file that fails the PSNR threshold.
+  Default: `./check_err_images.sh`
 
-Error codes:
+Run `./check_err_images.sh` script to view images with CPSNR lower than defined (15dB by default)
+
+### Error codes:
 
 - `0`: validation passed
 - `10`: RAW output file missing
@@ -85,17 +105,20 @@ Error codes:
 - `13`: PSNR below threshold
 - `14`: other processing failure
 
-## RAW Viewer
+## RAW image viewer: _view_raw.py_
 
 Use `view_raw.py` to open a de-Bayered preview of an 8-bit `.RAW` file.
 
 By default, metadata is parsed from filenames that end with `WIDTHxHEIGHT@PATTERN`,
-for example `ILSVRC2012_val_00000001_500x375@RGGB.RAW`.
+for example `img0_500x375@RGGB.RAW`.
 
-Viewer arguments:
-
+```bash
+source ./.venv/bin/activate
+python view_raw.py img0_500x375@RGGB.RAW
+```
+### Arguments
 - `raw_file`
-  Path to the `.RAW` file to view
+  Path to the `.RAW` file to view. 
 - `--width`
   Override image width
 - `--height`

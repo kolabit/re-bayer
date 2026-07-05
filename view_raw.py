@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,6 +12,7 @@ import numpy as np
 
 VALID_BAYER_STARTS = {"RGGB", "GRBG", "GBRG", "BGGR"}
 
+#RAW image files should have name like FILENAME_640x480@RGGB.RAW
 RAW_SUFFIX_RE = re.compile(
     r"_(?P<width>\d+)x(?P<height>\d+)@(?P<bayer_start>RGGB|GRBG|GBRG|BGGR)$",
     re.IGNORECASE,
@@ -51,6 +53,7 @@ def parse_args() -> argparse.Namespace:
         help="Override image height. Default: parsed from filename suffix.",
     )
     parser.add_argument(
+        "-b",
         "--bayer-start",
         choices=sorted(VALID_BAYER_STARTS),
         type=str.upper,
@@ -65,7 +68,7 @@ def parse_args() -> argparse.Namespace:
         "--wait-ms",
         type=int,
         default=0,
-        help="Milliseconds to wait before closing. Use 0 to wait for a key press. Default: 0",
+        help="Milliseconds to wait before closing. Use 0 to wait for a key press or window close. Default: 0",
     )
     return parser.parse_args()
 
@@ -144,6 +147,24 @@ def debayer_to_bgr(bayer_image: np.ndarray, bayer_start: str) -> np.ndarray:
     return cv2.cvtColor(bayer_image, OPENCV_BAYER_CONVERSIONS[bayer_start])
 
 
+def window_is_visible(window_name: str) -> bool:
+    try:
+        return cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) >= 1
+    except cv2.error:
+        return False
+
+
+def wait_until_key_or_close(window_name: str, wait_ms: int) -> None:
+    poll_ms = 50
+    deadline = None if wait_ms == 0 else time.monotonic() + (wait_ms / 1000.0)
+
+    while window_is_visible(window_name):
+        if cv2.waitKey(poll_ms) >= 0:
+            break
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+
+
 def view_raw_file(
     raw_path: Path,
     width: int | None = None,
@@ -157,7 +178,7 @@ def view_raw_file(
     debayered = debayer_to_bgr(bayer_image, metadata.bayer_start)
 
     cv2.imshow(window_name, debayered)
-    cv2.waitKey(wait_ms)
+    wait_until_key_or_close(window_name, wait_ms)
     cv2.destroyAllWindows()
 
 
