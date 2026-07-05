@@ -1,7 +1,7 @@
 # ***Re-bayer*** project
 Utilities for converting RGB images into RAW Bayer files using simple sub-sampling algorithm. 
 
-![Re-Bayer algorithm](./re-bayer.jpg)
+![Re-Bayer algorithm](./img/re-bayer.jpg)
 
 Tested on Linux only. It *may* work on Windows, but never tested.
 # Prerequisites
@@ -73,7 +73,7 @@ python re-bayer.py -i ./test_data/imagenet_val_5  -o ./test_data/imagenet_val_5_
 ## Image validator: _validate.py_
 Utility to validate converted RAW Bayer. Conversion is performed by checking image Color pixel signal to noise ratio (CPSNR).
 Value of 15dB and higher usually means conversion was OK.
-![CPSNR](./psnr.jpg)
+![CPSNR](./img/psnr.jpg)
 
 ### Usage
 ```bash
