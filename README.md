@@ -44,7 +44,8 @@ uv sync
 
 This command creates a virtual environment (if necessary) and installs all required project dependencies.
 
-# Test with images of five classes of validation set of ImageNet-1k dataset
+# Test 
+Run test with images of five classes of validation set of ImageNet-1k dataset
 ```bash
 source ./.venv/bin/activate
 ./run_test.sh
