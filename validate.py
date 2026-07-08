@@ -53,7 +53,7 @@ def parse_args() -> argparse.Namespace:
         default="./out",
         help=(
             "Folder with output .RAW files. Relative input subfolders are "
-            "preserved. Default: ./our"
+            "preserved. Default: ./out"
         ),
     )
     parser.add_argument(
@@ -75,6 +75,16 @@ def parse_args() -> argparse.Namespace:
         help="Minimum acceptable PSNR in dB. Default: 15.0",
     )
     parser.add_argument(
+        "--dfpd-recheck-margin-percent",
+        type=float,
+        default=15.0,
+        help=(
+            "Re-check fast PSNR failures with DFPD when the fast PSNR is within "
+            "this percent below --min-psnr. Use 0 to re-check only exact-threshold "
+            "failures. Default: 15.0"
+        ),
+    )
+    parser.add_argument(
         "-r",
         "--report-csv",
         default="./validation_report.csv",
@@ -86,7 +96,8 @@ def parse_args() -> argparse.Namespace:
         default="./check_err_images.sh",
         help=(
             "Optional shell script output path. When set, writes commands that run "
-            "view_raw.py for each RAW file that fails the PSNR threshold. Default: ./check_err_images.sh",
+            "view_raw.py for each RAW file that fails the PSNR threshold. "
+            "Default: ./check_err_images.sh"
         ),
     )
     return parser.parse_args()
@@ -125,14 +136,31 @@ OPENCV_BAYER_CONVERSIONS = {
 
 
 def debayer_raw(raw_bytes: bytes, width: int, height: int, pattern: str) -> Image.Image:
+    bayer_image = raw_bytes_to_bayer(raw_bytes, width, height)
+    rgb_array = cv2.cvtColor(bayer_image, OPENCV_BAYER_CONVERSIONS[pattern])
+    return Image.fromarray(rgb_array, mode="RGB")
+
+
+def raw_bytes_to_bayer(raw_bytes: bytes, width: int, height: int) -> np.ndarray:
     expected_size = width * height
     if len(raw_bytes) != expected_size:
         raise ValueError(
             f"RAW size mismatch: expected {expected_size} bytes for {width}x{height}, got {len(raw_bytes)}."
         )
 
-    bayer_image = np.frombuffer(raw_bytes, dtype=np.uint8).reshape((height, width))
-    rgb_array = cv2.cvtColor(bayer_image, OPENCV_BAYER_CONVERSIONS[pattern])
+    return np.frombuffer(raw_bytes, dtype=np.uint8).reshape((height, width))
+
+
+def debayer_raw_dfpd(
+    raw_bytes: bytes,
+    width: int,
+    height: int,
+    pattern: str,
+) -> Image.Image:
+    from debayer_dataset import demosaic_menon2007
+
+    bayer_image = raw_bytes_to_bayer(raw_bytes, width, height)
+    rgb_array = demosaic_menon2007(bayer_image, pattern)
     return Image.fromarray(rgb_array, mode="RGB")
 
 
@@ -168,6 +196,22 @@ def calculate_psnr(reference: Image.Image, candidate: Image.Image) -> float:
     return 10.0 * math.log10((255.0**2) / mse)
 
 
+def format_psnr(psnr: float) -> str:
+    return "inf" if math.isinf(psnr) else f"{psnr:.4f}"
+
+
+def should_recheck_with_dfpd(
+    fast_psnr: float,
+    min_psnr: float,
+    margin_percent: float,
+) -> bool:
+    if math.isinf(fast_psnr) or fast_psnr >= min_psnr:
+        return False
+
+    recheck_floor = min_psnr * (1.0 - (margin_percent / 100.0))
+    return fast_psnr >= recheck_floor
+
+
 def write_report(report_path: Path, rows: list[dict[str, str]]) -> None:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     with report_path.open("w", newline="", encoding="utf-8") as report_file:
@@ -179,6 +223,9 @@ def write_report(report_path: Path, rows: list[dict[str, str]]) -> None:
                 "status",
                 "error_code",
                 "psnr_db",
+                "fast_psnr_db",
+                "dfpd_recheck_psnr_db",
+                "dfpd_recheck",
                 "message",
             ],
         )
@@ -229,6 +276,9 @@ def main() -> int:
             f"Output folder does not exist or is not a directory: {output_folder}"
         )
 
+    if args.dfpd_recheck_margin_percent < 0:
+        raise SystemExit("--dfpd-recheck-margin-percent must be non-negative.")
+
     input_files = get_input_files(input_folder)
     if not input_files:
         print(f"No supported image files found in {input_folder}")
@@ -257,6 +307,9 @@ def main() -> int:
             "status": STATUS_OK,
             "error_code": str(ERROR_OK),
             "psnr_db": "",
+            "fast_psnr_db": "",
+            "dfpd_recheck_psnr_db": "",
+            "dfpd_recheck": "not_needed",
             "message": "",
         }
 
@@ -278,24 +331,90 @@ def main() -> int:
                 )
 
             psnr = calculate_psnr(source_rgb, debayered)
-            row["psnr_db"] = "inf" if math.isinf(psnr) else f"{psnr:.4f}"
+            row["psnr_db"] = format_psnr(psnr)
+            row["fast_psnr_db"] = format_psnr(psnr)
 
             if psnr < args.min_psnr:
-                row["status"] = STATUS_ERROR
-                row["error_code"] = str(ERROR_PSNR_TOO_LOW)
-                row["message"] = (
-                    f"PSNR {psnr:.4f} dB is below minimum threshold {args.min_psnr:.4f} dB."
-                )
-                psnr_error_raw_paths.append(output_path)
-                failed_count += 1
-                print(
-                    f"ERROR {ERROR_PSNR_TOO_LOW}: {input_label} vs {output_label} -> "
-                    f"PSNR {psnr:.4f} dB below threshold {args.min_psnr:.4f} dB"
-                )
+                if should_recheck_with_dfpd(
+                    psnr,
+                    args.min_psnr,
+                    args.dfpd_recheck_margin_percent,
+                ):
+                    row["dfpd_recheck"] = "attempted"
+                    try:
+                        dfpd_debayered = debayer_raw_dfpd(
+                            raw_bytes,
+                            width,
+                            height,
+                            args.pattern,
+                        )
+                        dfpd_psnr = calculate_psnr(source_rgb, dfpd_debayered)
+                        row["dfpd_recheck_psnr_db"] = format_psnr(dfpd_psnr)
+
+                        if dfpd_psnr >= args.min_psnr:
+                            row["dfpd_recheck"] = "passed"
+                            row["psnr_db"] = format_psnr(dfpd_psnr)
+                            row["message"] = (
+                                f"Fast PSNR {psnr:.4f} dB was below minimum threshold "
+                                f"{args.min_psnr:.4f} dB; DFPD re-check passed with "
+                                f"{format_psnr(dfpd_psnr)} dB."
+                            )
+                            print(
+                                f"OK: {input_label} vs {output_label} -> "
+                                f"fast PSNR {psnr:.4f} dB, DFPD re-check "
+                                f"{format_psnr(dfpd_psnr)} dB"
+                            )
+                        else:
+                            row["dfpd_recheck"] = "failed"
+                            row["status"] = STATUS_ERROR
+                            row["error_code"] = str(ERROR_PSNR_TOO_LOW)
+                            row["message"] = (
+                                f"Fast PSNR {psnr:.4f} dB and DFPD re-check PSNR "
+                                f"{dfpd_psnr:.4f} dB are below minimum threshold "
+                                f"{args.min_psnr:.4f} dB."
+                            )
+                            psnr_error_raw_paths.append(output_path)
+                            failed_count += 1
+                            print(
+                                f"ERROR {ERROR_PSNR_TOO_LOW}: {input_label} vs {output_label} -> "
+                                f"fast PSNR {psnr:.4f} dB, DFPD re-check "
+                                f"{dfpd_psnr:.4f} dB below threshold {args.min_psnr:.4f} dB"
+                            )
+                    except Exception as exc:
+                        row["dfpd_recheck"] = "error"
+                        row["status"] = STATUS_ERROR
+                        row["error_code"] = str(ERROR_PSNR_TOO_LOW)
+                        row["message"] = (
+                            f"Fast PSNR {psnr:.4f} dB is below minimum threshold "
+                            f"{args.min_psnr:.4f} dB; DFPD re-check failed: {exc}"
+                        )
+                        psnr_error_raw_paths.append(output_path)
+                        failed_count += 1
+                        print(
+                            f"ERROR {ERROR_PSNR_TOO_LOW}: {input_label} vs {output_label} -> "
+                            f"fast PSNR {psnr:.4f} dB below threshold {args.min_psnr:.4f} dB; "
+                            f"DFPD re-check failed: {exc}"
+                        )
+                else:
+                    row["dfpd_recheck"] = "skipped"
+                    row["status"] = STATUS_ERROR
+                    row["error_code"] = str(ERROR_PSNR_TOO_LOW)
+                    row["message"] = (
+                        f"PSNR {psnr:.4f} dB is below minimum threshold {args.min_psnr:.4f} dB "
+                        f"and outside the {args.dfpd_recheck_margin_percent:.4f}% DFPD "
+                        "re-check margin."
+                    )
+                    psnr_error_raw_paths.append(output_path)
+                    failed_count += 1
+                    print(
+                        f"ERROR {ERROR_PSNR_TOO_LOW}: {input_label} vs {output_label} -> "
+                        f"PSNR {psnr:.4f} dB below threshold {args.min_psnr:.4f} dB "
+                        "and outside DFPD re-check margin"
+                    )
             else:
                 print(
                     f"OK: {input_label} vs {output_label} -> "
-                    f"PSNR {'inf' if math.isinf(psnr) else f'{psnr:.4f}'} dB"
+                    f"PSNR {format_psnr(psnr)} dB"
                 )
 
         except FileNotFoundError as exc:

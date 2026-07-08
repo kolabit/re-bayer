@@ -89,13 +89,15 @@ python validate.py -i ./test_data/imagenet_val_5  -o ./test_data/imagenet_val_5_
   Bayer pattern: `RGGB`, `GRBG`, `GBRG`, `BGGR`. Default: `RGGB`
 - `--min-psnr`, `-m`
   Minimum acceptable PSNR in dB. Default: `15.0`
+- `--dfpd-recheck-margin-percent`
+  Re-check fast de-Bayer PSNR failures with DFPD when the fast PSNR is within this percent below `--min-psnr`. Default: `15.0`
 - `--report-csv, `-r`
   CSV report path. Default: `./validation_report.csv`
 - `--psnr-error-view-script, `-e`
   Optional shell script output path. When set, writes commands that run view_raw.py for each RAW file that fails the PSNR threshold.
   Default: `./check_err_images.sh`
 
-Run `./check_err_images.sh` script to view images with CPSNR lower than defined (15dB by default)
+Run `./check_err_images.sh` script to view images with CPSNR lower than defined (15dB by default). Images that pass the DFPD re-check are mentioned in the CSV report and are not added to this script.
 
 ### Error codes:
 
@@ -108,7 +110,7 @@ Run `./check_err_images.sh` script to view images with CPSNR lower than defined 
 
 ## RAW image viewer: _view_raw.py_
 
-Use `view_raw.py` to open a de-Bayered preview of an 8-bit `.RAW` file.
+Use `view_raw.py` to open a resizable de-Bayered preview of an 8-bit `.RAW` file. The window opens at 100% image scale.
 
 By default, metadata is parsed from filenames that end with `WIDTHxHEIGHT@PATTERN`,
 for example `img0_500x375@RGGB.RAW`.
@@ -126,5 +128,9 @@ python view_raw.py img0_500x375@RGGB.RAW
   Override image height
 - `--bayer-start`
   Override Bayer start/pattern: `RGGB`, `GRBG`, `GBRG`, `BGGR`
+- `--method`, `-m`
+  De-Bayer method: `dfpd` or `opencv`. Default: `dfpd`
+- `--show-file-name-in-caption`, `--no-show-file-name-in-caption`
+  Show the RAW file name in the OpenCV window title. Default: enabled
 - `--wait-ms`
   Milliseconds to keep the OpenCV window open. Default: `0`, wait for a key press

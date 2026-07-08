@@ -11,6 +11,8 @@ import numpy as np
 
 
 VALID_BAYER_STARTS = {"RGGB", "GRBG", "GBRG", "BGGR"}
+VALID_DEBAYER_METHODS = {"dfpd", "opencv"}
+DEFAULT_WINDOW_NAME = "De-Bayered RAW"
 
 #RAW image files should have name like FILENAME_640x480@RGGB.RAW
 RAW_SUFFIX_RE = re.compile(
@@ -36,7 +38,7 @@ class RawImageMetadata:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "View an 8-bit Bayer RAW file after de-Bayering it with OpenCV. "
+            "View an 8-bit Bayer RAW file after de-Bayering it. "
             "By default, width, height, and Bayer start are read from filenames like "
             "image_500x375@RGGB.RAW."
         )
@@ -60,9 +62,17 @@ def parse_args() -> argparse.Namespace:
         help="Override Bayer start/pattern. Default: parsed from filename suffix.",
     )
     parser.add_argument(
-        "--window-name",
-        default="De-Bayered RAW",
-        help="OpenCV window title. Default: De-Bayered RAW",
+        "-m",
+        "--method",
+        choices=sorted(VALID_DEBAYER_METHODS),
+        default="dfpd",
+        help="De-Bayer method: dfpd or opencv. Default: dfpd",
+    )
+    parser.add_argument(
+        "--show-file-name-in-caption",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Show the RAW file name in the OpenCV window title. Default: enabled",
     )
     parser.add_argument(
         "--wait-ms",
@@ -143,7 +153,20 @@ def read_bayer_image(raw_path: Path, metadata: RawImageMetadata) -> np.ndarray:
     )
 
 
-def debayer_to_bgr(bayer_image: np.ndarray, bayer_start: str) -> np.ndarray:
+def debayer_to_bgr(
+    bayer_image: np.ndarray,
+    bayer_start: str,
+    method: str = "dfpd",
+) -> np.ndarray:
+    if method == "dfpd":
+        from debayer_dataset import demosaic_menon2007
+
+        rgb = demosaic_menon2007(bayer_image, bayer_start)
+        return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+
+    if method != "opencv":
+        raise ValueError(f"Unsupported de-Bayer method: {method}")
+
     return cv2.cvtColor(bayer_image, OPENCV_BAYER_CONVERSIONS[bayer_start])
 
 
@@ -165,20 +188,68 @@ def wait_until_key_or_close(window_name: str, wait_ms: int) -> None:
             break
 
 
+def resolve_window_caption(
+    raw_path: Path,
+    show_file_name: bool,
+) -> str:
+    if not show_file_name:
+        return DEFAULT_WINDOW_NAME
+
+    return f"{DEFAULT_WINDOW_NAME} - {raw_path.name}"
+
+
+def resize_window_to_image_scale(
+    window_name: str,
+    image: np.ndarray,
+    scale: float = 1.0,
+) -> None:
+    target_width = max(1, round(image.shape[1] * scale))
+    target_height = max(1, round(image.shape[0] * scale))
+    requested_width = target_width
+    requested_height = target_height
+
+    for _ in range(5):
+        cv2.resizeWindow(window_name, requested_width, requested_height)
+        cv2.waitKey(1)
+
+        try:
+            _, _, visible_width, visible_height = cv2.getWindowImageRect(window_name)
+        except cv2.error:
+            return
+
+        if visible_width <= 0 or visible_height <= 0:
+            return
+
+        width_delta = target_width - visible_width
+        height_delta = target_height - visible_height
+        if abs(width_delta) <= 1 and abs(height_delta) <= 1:
+            return
+
+        requested_width = max(1, requested_width + width_delta)
+        requested_height = max(1, requested_height + height_delta)
+
+
 def view_raw_file(
     raw_path: Path,
     width: int | None = None,
     height: int | None = None,
     bayer_start: str | None = None,
-    window_name: str = "De-Bayered RAW",
+    method: str = "dfpd",
+    show_file_name_in_caption: bool = True,
     wait_ms: int = 0,
 ) -> None:
     metadata = resolve_metadata(raw_path, width, height, bayer_start)
     bayer_image = read_bayer_image(raw_path, metadata)
-    debayered = debayer_to_bgr(bayer_image, metadata.bayer_start)
+    debayered = debayer_to_bgr(bayer_image, metadata.bayer_start, method)
+    caption = resolve_window_caption(
+        raw_path,
+        show_file_name_in_caption,
+    )
 
-    cv2.imshow(window_name, debayered)
-    wait_until_key_or_close(window_name, wait_ms)
+    cv2.namedWindow(caption, cv2.WINDOW_NORMAL)
+    cv2.imshow(caption, debayered)
+    resize_window_to_image_scale(caption, debayered)
+    wait_until_key_or_close(caption, wait_ms)
     cv2.destroyAllWindows()
 
 
@@ -195,7 +266,8 @@ def main() -> int:
             width=args.width,
             height=args.height,
             bayer_start=args.bayer_start,
-            window_name=args.window_name,
+            method=args.method,
+            show_file_name_in_caption=args.show_file_name_in_caption,
             wait_ms=args.wait_ms,
         )
     except ValueError as exc:
